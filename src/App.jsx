@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, Apple, CalendarDays, Check, CheckCircle2, ChevronLeft,
   ChevronRight, ClipboardList, Droplets, Dumbbell, Heart, Home,
@@ -76,6 +76,9 @@ export default function App() {
   const [googleEvents, setGoogleEvents] = useState([]);
   const [googleStatus, setGoogleStatus] = useState("disconnected");
   const [googleMessage, setGoogleMessage] = useState("");
+  const [googleReady, setGoogleReady] = useState(false);
+  const tokenClientRef = useRef(null);
+  const googleTokenRef = useRef(null);
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
   const [weightInput, setWeightInput] = useState("");
@@ -92,6 +95,156 @@ export default function App() {
   const [mealType, setMealType] = useState(mealsTypes[0]);
   const [foodName, setFoodName] = useState("");
   const [calories, setCalories] = useState("");
+
+  useEffect(() => {
+    if (!googleClientId) {
+      setGoogleStatus("missing-config");
+      setGoogleMessage(
+        "Configure VITE_GOOGLE_CLIENT_ID no arquivo .env para conectar o Google Agenda."
+      );
+      return;
+    }
+
+    let cancelled = false;
+
+    const initializeGoogle = () => {
+      if (cancelled || !window.google?.accounts?.oauth2) return false;
+
+      tokenClientRef.current =
+        window.google.accounts.oauth2.initTokenClient({
+          client_id: googleClientId,
+          scope: "https://www.googleapis.com/auth/calendar.readonly",
+          callback: async (tokenResponse) => {
+            if (tokenResponse.error) {
+              setGoogleStatus("error");
+              setGoogleMessage(
+                tokenResponse.error === "access_denied"
+                  ? "A autorização foi cancelada. Você pode tentar novamente."
+                  : "O Google não autorizou o acesso. Confira a configuração OAuth."
+              );
+              return;
+            }
+
+            try {
+              const accessToken = tokenResponse.access_token;
+              googleTokenRef.current = accessToken;
+
+              const now = new Date();
+              const later = new Date();
+              later.setDate(later.getDate() + 45);
+
+              const params = new URLSearchParams({
+                timeMin: now.toISOString(),
+                timeMax: later.toISOString(),
+                showDeleted: "false",
+                singleEvents: "true",
+                orderBy: "startTime",
+                maxResults: "100"
+              });
+
+              const response = await fetch(
+                `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${accessToken}`
+                  }
+                }
+              );
+
+              if (!response.ok) {
+                const errorBody = await response.json().catch(() => ({}));
+                throw new Error(
+                  errorBody.error?.message || `Google Calendar HTTP ${response.status}`
+                );
+              }
+
+              const result = await response.json();
+              const items = (result.items || []).map(event => ({
+                id: event.id,
+                title: event.summary || "Sem título",
+                date: (event.start?.dateTime || event.start?.date || "").slice(0, 10),
+                time: event.start?.dateTime
+                  ? new Date(event.start.dateTime).toLocaleTimeString("pt-BR", {
+                      hour: "2-digit",
+                      minute: "2-digit"
+                    })
+                  : "Dia inteiro",
+                source: "google",
+                htmlLink: event.htmlLink
+              }));
+
+              setGoogleEvents(items);
+              setGoogleStatus("connected");
+              setGoogleMessage(
+                `Calendário conectado! ${items.length} evento(s) encontrados nos próximos 45 dias.`
+              );
+            } catch (error) {
+              console.error("Google Calendar:", error);
+              setGoogleStatus("error");
+              setGoogleMessage(
+                error.message || "Não foi possível carregar os eventos do Google Agenda."
+              );
+            }
+          }
+        });
+
+      setGoogleReady(true);
+      setGoogleStatus("disconnected");
+      setGoogleMessage("");
+      return true;
+    };
+
+    if (initializeGoogle()) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    let script = document.querySelector(
+      'script[src="https://accounts.google.com/gsi/client"]'
+    );
+
+    const handleLoad = () => {
+      if (!initializeGoogle() && !cancelled) {
+        setGoogleStatus("error");
+        setGoogleMessage(
+          "O serviço do Google carregou, mas não ficou disponível. Atualize a página e tente novamente."
+        );
+      }
+    };
+
+    const handleError = () => {
+      if (!cancelled) {
+        setGoogleStatus("error");
+        setGoogleMessage(
+          "Não foi possível carregar o serviço de autenticação do Google. Confira sua conexão."
+        );
+      }
+    };
+
+    if (!script) {
+      script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.addEventListener("load", handleLoad, { once: true });
+      script.addEventListener("error", handleError, { once: true });
+      document.head.appendChild(script);
+    } else {
+      script.addEventListener("load", handleLoad, { once: true });
+      script.addEventListener("error", handleError, { once: true });
+
+      if (script.readyState === "complete" || window.google?.accounts?.oauth2) {
+        handleLoad();
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      script?.removeEventListener("load", handleLoad);
+      script?.removeEventListener("error", handleError);
+    };
+  }, [googleClientId]);
 
   useEffect(() => {
     localStorage.setItem("my-routine-data", JSON.stringify(data));
@@ -161,15 +314,20 @@ export default function App() {
     setSelectedDate(`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`);
   }
 
-  async function connectGoogleCalendar() {
+  function connectGoogleCalendar() {
     if (!googleClientId) {
       setGoogleStatus("missing-config");
-      setGoogleMessage("Para ativar a conexão, configure VITE_GOOGLE_CLIENT_ID no arquivo .env. Veja o passo a passo no README.");
+      setGoogleMessage(
+        "Configure VITE_GOOGLE_CLIENT_ID no arquivo .env e faça um novo deploy."
+      );
       return;
     }
-    if (!window.google?.accounts?.oauth2 || !window.gapi) {
+
+    if (!googleReady || !tokenClientRef.current) {
       setGoogleStatus("error");
-      setGoogleMessage("Não foi possível carregar os serviços do Google. Confira sua conexão com a internet e tente novamente.");
+      setGoogleMessage(
+        "O Google ainda está carregando. Aguarde alguns segundos e tente novamente."
+      );
       return;
     }
 
@@ -177,72 +335,25 @@ export default function App() {
     setGoogleMessage("Aguardando autorização do Google…");
 
     try {
-      await new Promise((resolve, reject) => {
-        window.gapi.load("client", async () => {
-          try {
-            await window.gapi.client.init({
-              discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest"]
-            });
-            const tokenClient = window.google.accounts.oauth2.initTokenClient({
-              client_id: googleClientId,
-              scope: "https://www.googleapis.com/auth/calendar.readonly",
-              callback: async (tokenResponse) => {
-                if (tokenResponse.error) {
-                  reject(new Error(tokenResponse.error));
-                  return;
-                }
-                try {
-                  window.gapi.client.setToken(tokenResponse);
-                  const now = new Date();
-                  const later = new Date();
-                  later.setDate(later.getDate() + 45);
-                  const response = await window.gapi.client.calendar.events.list({
-                    calendarId: "primary",
-                    timeMin: now.toISOString(),
-                    timeMax: later.toISOString(),
-                    showDeleted: false,
-                    singleEvents: true,
-                    orderBy: "startTime",
-                    maxResults: 100
-                  });
-                  const items = (response.result.items || []).map(event => ({
-                    id: event.id,
-                    title: event.summary || "Sem título",
-                    date: (event.start?.dateTime || event.start?.date || "").slice(0, 10),
-                    time: event.start?.dateTime
-                      ? new Date(event.start.dateTime).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-                      : "Dia inteiro",
-                    source: "google",
-                    htmlLink: event.htmlLink
-                  }));
-                  setGoogleEvents(items);
-                  setGoogleStatus("connected");
-                  setGoogleMessage(`Calendário conectado! ${items.length} evento(s) encontrados nos próximos 45 dias.`);
-                  resolve();
-                } catch (error) {
-                  reject(error);
-                }
-              }
-            });
-            tokenClient.requestAccessToken({ prompt: "consent" });
-          } catch (error) {
-            reject(error);
-          }
-        });
-      });
+      // Solicita o token diretamente no clique do usuário.
+      tokenClientRef.current.requestAccessToken({ prompt: "consent" });
     } catch (error) {
+      console.error("Google OAuth:", error);
       setGoogleStatus("error");
-      setGoogleMessage("Não foi possível acessar o Google Agenda. Verifique as permissões e a configuração OAuth.");
-      console.error("Google Calendar:", error);
+      setGoogleMessage(
+        "Não foi possível abrir a autorização. Verifique se pop-ups estão permitidos e tente novamente."
+      );
     }
   }
 
   function disconnectGoogleCalendar() {
-    const token = window.gapi?.client?.getToken?.();
-    if (token?.access_token && window.google?.accounts?.oauth2) {
-      window.google.accounts.oauth2.revoke(token.access_token, () => {});
+    const token = googleTokenRef.current;
+
+    if (token && window.google?.accounts?.oauth2) {
+      window.google.accounts.oauth2.revoke(token, () => {});
     }
-    window.gapi?.client?.setToken(null);
+
+    googleTokenRef.current = null;
     setGoogleEvents([]);
     setGoogleStatus("disconnected");
     setGoogleMessage("Google Agenda desconectado.");
@@ -331,8 +442,18 @@ export default function App() {
         {googleStatus === "connected" ? (
           <button className="soft-button" onClick={disconnectGoogleCalendar}>Desconectar Google Agenda</button>
         ) : (
-          <button className="google-button" onClick={connectGoogleCalendar} disabled={googleStatus === "connecting"}>
-            {googleStatus === "connecting" ? "Conectando…" : "Conectar com Google"}
+          <button
+            className="google-button"
+            onClick={connectGoogleCalendar}
+            disabled={(!!googleClientId && !googleReady) || googleStatus === "connecting"}
+          >
+            {googleStatus === "connecting"
+              ? "Conectando…"
+              : !googleClientId
+                ? "Configurar Google"
+                : !googleReady
+                  ? "Carregando Google…"
+                  : "Conectar com Google"}
           </button>
         )}
         {googleMessage && <p className={`google-message ${googleStatus === "error" || googleStatus === "missing-config" ? "google-error" : ""}`}>{googleMessage}</p>}
