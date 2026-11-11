@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, Apple, CalendarDays, Check, CheckCircle2, ChevronLeft,
   ChevronRight, ClipboardList, Droplets, Dumbbell, Heart, Home,
-  Plus, Trash2, X, Clock3, Target, Menu, Utensils, Scale
+  Plus, Trash2, X, Clock3, Target, Menu, Utensils, Scale, Sun, Moon
 } from "lucide-react";
 
 const todayISO = () => {
@@ -68,6 +68,7 @@ function Field({ label, children }) {
 export default function App() {
   const [data, setData] = useState(loadData);
   const [page, setPage] = useState("home");
+  const [theme, setTheme] = useState(() => localStorage.getItem("my-routine-theme") || "light");
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [month, setMonth] = useState(() => {
     const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -249,6 +250,11 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("my-routine-data", JSON.stringify(data));
   }, [data]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("my-routine-theme", theme);
+  }, [theme]);
 
   const update = (key, value) => setData(current => ({ ...current, [key]: value }));
   const add = (key, item) => update(key, [...data[key], { id: uid(), ...item }]);
@@ -541,7 +547,7 @@ export default function App() {
     return null;
   };
 
-  return <div className="app-shell">
+  return <div className={`app-shell theme-${theme}`} data-theme={theme}>
     <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}>
       <div className="brand"><div className="brand-mark">✳</div><div><strong>my routine</strong><small>your personal space</small></div></div>
       <div className="nav-caption">MENU PRINCIPAL</div>
@@ -549,7 +555,7 @@ export default function App() {
       <div className="sidebar-note"><Heart size={19}/><b>Um dia de cada vez.</b><span>Organize sua vida, no seu ritmo.</span></div>
     </aside>
     <main className="main-area">
-      <header className="topbar"><button className="mobile-menu-button" onClick={() => setMobileMenu(!mobileMenu)} aria-label="Abrir menu"><Menu size={21}/></button><div className="topbar-title"><span className="eyebrow">SEU ESPAÇO PESSOAL</span><h1>{title}</h1></div><div className="topbar-actions">{page !== "home" && <button className="home-return" onClick={() => setPage("home")}><Home size={16}/> Voltar ao início</button>}<div className="top-date">{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</div></div></header>
+      <header className="topbar"><button className="mobile-menu-button" onClick={() => setMobileMenu(!mobileMenu)} aria-label="Abrir menu"><Menu size={21}/></button><div className="topbar-title"><span className="eyebrow">SEU ESPAÇO PESSOAL</span><h1>{title}</h1></div><div className="topbar-actions">{page !== "home" && <button className="home-return" onClick={() => setPage("home")}><Home size={16}/> Voltar ao início</button>}<button className="theme-toggle" onClick={() => setTheme(current => current === "light" ? "dark" : "light")} aria-label={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"} title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}<span>{theme === "light" ? "Modo escuro" : "Modo claro"}</span></button><div className="top-date">{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</div></div></header>
       {pageContent()}
       <footer className="footer">MY ROUTINE <span>·</span> Feito com carinho para você ♡</footer>
     </main>
